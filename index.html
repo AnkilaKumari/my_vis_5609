@@ -1,29 +1,51 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <style>
-      /* compiled from css file */
-      button {
-        background-color: blue;
-        color: white;
-        padding: 10px 20px;
-        border: none;
-        cursor: pointer;
-        border-radius: 5px;
-      }
-    </style>
-    <script>
-      // compiled from javascript file
-      var cnt = 0;
-      function onClick() {
-        cnt += 1;
-        document.getElementById("clicks").innerHTML = cnt;
-        document.getElementById("clickButton").innerHTML = "Click me " + cnt + " times";
-      }
-    </script>
-  </head>
-  <body>
-    <button id="clickButton" type="button" onClick="onClick()">Click me</button>
-    <p>Number of Clicks: <a id="clicks">0</a></p>
-  </body>
+<head>
+<style>
+  /* button styles */
+  button {
+    background-color: #1b198b;
+    color: white;
+    padding: 15px 25px;
+    border: none;
+    cursor: pointer;
+    border-radius: 5px;
+    font-size: xx-large;
+    margin: 5px;
+  }
+</style>
+<script>
+  // counter variables
+  var cnt = 0;
+  var maxClicks = 5;
+
+  function increaseClick() {
+    if (cnt < maxClicks) {
+      cnt++;
+      updateDisplay();
+    } else {
+      alert("No more clicks remaining!");
+    }
+  }
+
+  function decreaseClick() {
+    if (cnt > 0) {
+      cnt--;
+      updateDisplay();
+    }
+  }
+
+  function updateDisplay() {
+    document.getElementById("clicks").innerHTML = cnt;
+    document.getElementById("remaining").innerHTML = maxClicks - cnt;
+  }
+</script>
+</head>
+<body>
+  <p>You can click up to 5 times</p>
+  <button onclick="increaseClick()">Click me</button>
+
+  <p>Number of Clicks: <a id="clicks">0</a></p>
+  <p>Remaining Clicks: <a id="remaining">5</a></p>
+</body>
 </html>

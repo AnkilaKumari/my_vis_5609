@@ -1,120 +1,158 @@
 <script lang="ts">
-  import * as d3 from "d3";
-  import { onMount } from "svelte";
-  import type { TMovie } from "../../../types";
+    import * as d3 from "d3";
+    import Scatter from "$lib/Scatter.svelte";
+    import Line from "$lib/Line.svelte";
+    import { onMount } from "svelte";
+    import type { TMovie } from "../../types";
 
-  let svg;
-  let movies: TMovie[] = [];
-  const width = 800;
-  const height = 500;
-  const margin = { top: 50, right: 40, bottom: 60, left: 60 };
+     let movies: TMovie[] = $state([]);
+    let yearRange: [Date, Date] | undefined = $state();
 
-  async function loadCsv() {
-    const csvUrl = "/summer_movies.csv";
-    const data = await d3.csv(csvUrl, (row: d3.DSVRowString<string>): TMovie => ({
-      tconst: row.tconst ?? "",
-      title_type: row.title_type ?? "",
-      primary_title: row.primary_title ?? "",
-      original_title: row.original_title ?? "",
-      year: row.year ? +row.year : 0,
-      runtime_minutes: row.runtime_minutes ? +row.runtime_minutes : 0,
-      genres: row.genres ?? "",
-      simple_title: row.simple_title ?? "",
-      average_rating: row.average_rating ? +row.average_rating : 0,
-      num_votes: row.num_votes ? +row.num_votes : 0,
-    }));
-    movies = data;
-    drawChart();
-  }
+    function getYearCountArray(movies: TMovie[]) {
+        let yearCount: { [year: number]: number } = {};
+        const allYears = [...new Set(movies.map((d) => d.year.getFullYear()))];
+        for (let year of allYears) {
+            yearCount[year] = movies.filter((d) => d.year.getFullYear() == year).length;
+        }
+        const yearCountArray = Object.entries(yearCount).map(([year, count]) => ({
+            x: new Date(year),
+            y: count as number,
+        }));
+        yearCountArray.sort((a, b) => (a.x < b.x ? -1 : 1));
+        return yearCountArray;
+    }
+    let yearCountArray = $derived(getYearCountArray(movies));
 
-  function drawChart() {
-    const svgEl = d3.select(svg);
-    svgEl.selectAll("*").remove();
+    type TAxisSelection = { x: keyof TMovie; y: keyof TMovie; size: keyof TMovie };
+    let axisSelection: TAxisSelection = $state({
+        x: "year",
+        y: "average_rating",
+        size: "num_votes",
+    });
 
-    // --- Count number of movies per genre per year ---
-    const grouped = d3.rollups(
-      movies.flatMap((m) =>
-        (m.genres ? m.genres.split(",") : []).map((g) => ({ year: m.year, genre: g.trim() }))
-      ),
-      (v) => v.length,
-      (d) => d.year,
-      (d) => d.genre
-    );
+    async function loadCsv() {
+        try {
+            const csvUrl = "./summer_movies.csv";
+            movies = await d3.csv(csvUrl, (row) => ({
+                ...row,
+                num_votes: Number(row.num_votes),
+                runtime_minutes: Number(row.runtime_minutes),
+                genres: String(row.genres || "").split(","),
+                year: new Date(row.year),
+                average_rating: Number(row.average_rating),
+            })) as unknown as TMovie[];
+        } catch (error) {
+            console.error("Error loading CSV:", error);
+        }
+    }
+    onMount(loadCsv);
 
-    // Convert nested structure to flat array
-    const flatData = grouped.flatMap(([year, map]) =>
-      Array.from(map, ([genre, count]) => ({ year, genre, count }))
-    );
+    // dropdown options
+    const attrOptionsX = $derived(movies[0] ? Object.keys(movies[0]) : []);
+    // remove arrays/long text from Y/Size (you can also filter 'title' fields if present)
+    const attrOptionsY = $derived(movies[0] ? Object.keys(movies[0]).filter((d) => d !== "genres") : []);
+    const attrOptionsS = $derived(movies[0] ? Object.keys(movies[0]).filter((d) => d !== "genres") : []);
 
-    // Get all genres and years
-    const allGenres = Array.from(new Set(flatData.map((d) => d.genre)));
-    const allYears = Array.from(new Set(flatData.map((d) => d.year))).sort();
-
-    // Limit to top 5 genres overall for visibility
-    const topGenres = Array.from(
-      d3
-        .rollups(flatData, (v) => d3.sum(v, (d) => d.count), (d) => d.genre)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5),
-      ([genre]) => genre
-    );
-
-    const data = d3.group(flatData.filter((d) => topGenres.includes(d.genre)), (d) => d.genre);
-
-    // --- Create scales ---
-    const x = d3
-      .scaleLinear()
-      .domain(d3.extent(allYears) as [number, number])
-      .range([margin.left, width - margin.right]);
-
-    const y = d3
-      .scaleLinear()
-      .domain([0, d3.max(flatData, (d) => d.count) || 0])
-      .nice()
-      .range([height - margin.bottom, margin.top]);
-
-    const color = d3.scaleOrdinal(d3.schemeSet2).domain(topGenres);
-
-    // --- Draw axes ---
-    svgEl
-      .append("g")
-      .attr("transform", `translate(0,${height - margin.bottom})`)
-      .call(d3.axisBottom(x).tickFormat(d3.format("d")));
-
-    svgEl
-      .append("g")
-      .attr("transform", `translate(${margin.left},0)`)
-      .call(d3.axisLeft(y));
-
-    // --- Draw lines ---
-    const line = d3
-      .line<{ year: number; count: number }>()
-      .x((d) => x(d.year))
-      .y((d) => y(d.count));
-
-    for (const [genre, values] of data.entries()) {
-      svgEl
-        .append("path")
-        .datum(values)
-        .attr("fill", "none")
-        .attr("stroke", color(genre))
-        .attr("stroke-width", 2)
-        .attr("d", line)
-        .append("title")
-        .text(genre);
+    // ---------- AUTO SIZE LOGIC ----------
+    function isBand(attr: keyof TMovie): boolean {
+        if (!movies[0]) return false;
+        const v = movies[0][attr];
+        return typeof v === "string" || typeof v === "object"; // arrays count as categorical
     }
 
-    // --- Add title ---
-    svgEl
-      .append("text")
-      .attr("x", width / 2)
-      .attr("y", 30)
-      .attr("text-anchor", "middle")
-      .style("font-size", "18px")
-      .text("Top 5 Genres Over Time");
-  }
+    function uniqueCount(attr: keyof TMovie, rows: TMovie[]) {
+        if (!rows.length) return 0;
+        if (attr === "genres") {
+            // union of all genres
+            const set = new Set<string>();
+            rows.forEach((m) => (m.genres || []).forEach((g) => set.add(g)));
+            return set.size;
+        }
+        const set = new Set<any>();
+        rows.forEach((m) => set.add(m[attr] as any));
+        return set.size;
+    }
 
-  onMount(loadCsv);
+    // base sizes + per-category growth + clamps
+    const BASE_W = 600, BASE_H = 500;
+    const PER_CAT_W = 28;   // grow x-length ~28 px per category
+    const PER_CAT_H = 22;   // grow y-length ~22 px per category
+    const MIN_W = 520, MAX_W = 1400;
+    const MIN_H = 360, MAX_H = 1000;
+
+    // compute domain sizes for currently visible rows (after brushing)
+    const visibleMovies = $derived(
+        yearRange
+            ? movies.filter((d) => d.year <= yearRange[1] && d.year >= yearRange[0])
+            : movies
+    );
+
+    const xIsBand = $derived(isBand(axisSelection.x));
+    const yIsBand = $derived(isBand(axisSelection.y));
+    const xCatCount = $derived(xIsBand ? uniqueCount(axisSelection.x, visibleMovies) : 0);
+    const yCatCount = $derived(yIsBand ? uniqueCount(axisSelection.y, visibleMovies) : 0);
+
+    // dynamic width/height (clamped)
+    const plotWidth = $derived(
+        xIsBand
+            ? Math.max(MIN_W, Math.min(MAX_W, BASE_W + Math.max(0, xCatCount - 12) * PER_CAT_W))
+            : BASE_W
+    );
+    const plotHeight = $derived(
+        yIsBand
+            ? Math.max(MIN_H, Math.min(MAX_H, BASE_H + Math.max(0, yCatCount - 10) * PER_CAT_H))
+            : BASE_H
+    );
 </script>
 
-<svg bind:this={svg} width={800} height={500}></svg>
+<div class="container" style="width: {Math.min(plotWidth + 80, 1500)}px;">
+    <h1>Summer Movies</h1>
+    <p>Here are {movies.length == 0 ? "..." : movies.length + " "} movies</p>
+
+    {#if movies.length > 0}
+        <div class="selectors" style="display:flex; gap:12px; align-items:center; flex-wrap: wrap;">
+            <label> X Axis:
+                <select bind:value={axisSelection.x}>
+                    {#each attrOptionsX as key}<option value={key}>{key}</option>{/each}
+                </select>
+            </label>
+            <label> Y Axis:
+                <select bind:value={axisSelection.y}>
+                    {#each attrOptionsY as key}<option value={key}>{key}</option>{/each}
+                </select>
+            </label>
+            <label> Size:
+                <select bind:value={axisSelection.size}>
+                    {#each attrOptionsS as key}<option value={key}>{key}</option>{/each}
+                </select>
+            </label>
+        </div>
+
+        <div class="chartWrap" style="overflow:auto;">
+            <Scatter
+                movies={visibleMovies}
+                x={axisSelection.x}
+                y={axisSelection.y}
+                size={axisSelection.size}
+                width={plotWidth}
+                height={plotHeight}
+            />
+        </div>
+
+        <br />
+
+        <div class="chartWrap" style="overflow:auto;">
+            <Line data={getYearCountArray(movies)} bind:yearRange width={plotWidth} />
+        </div>
+    {/if}
+</div>
+
+<style>
+    .container {
+        margin: 10px auto;
+        padding: 10px;
+    }
+    .chartWrap { /* allow big categorical charts without breaking the page */
+        max-width: 100%;
+    }
+</style>

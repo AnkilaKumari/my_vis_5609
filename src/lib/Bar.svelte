@@ -10,6 +10,13 @@
   const height = 500;
   const margin = { top: 40, right: 30, bottom: 90, left: 60 };
 
+  <g
+  class={`${genre} genre`}
+  transform={`translate(${usableArea.left}, ${yScale(genre)})`}
+  transition:fade
+>
+
+
   onMount(() => {
     if (movies.length === 0) return;
 
@@ -63,6 +70,13 @@
       .selectAll("text")
       .attr("transform", "rotate(-45)")
       .style("text-anchor", "end");
+      .genre {
+  transition: transform 0.8s ease;
+}
+.bar {
+  transition: width 0.8s ease, fill 0.3s ease;
+}
+
 
     svgEl
       .append("g")
@@ -75,6 +89,13 @@
       .attr("y", 30)
       .attr("text-anchor", "middle")
       .style("font-size", "18px")
+      .genre {
+  transition: transform 0.8s ease;
+}
+.bar {
+  transition: width 0.8s ease, fill 0.3s ease;
+}
+
       .text("Genre Distribution of Summer Movies");
   });
 </script>

@@ -1,158 +1,315 @@
 <script lang="ts">
-    import * as d3 from "d3";
-    import Scatter from "$lib/Scatter.svelte";
-    import Line from "$lib/Line.svelte";
     import { onMount } from "svelte";
-    import type { TMovie } from "../../types";
+    import * as THREE from "three";
+    import { FontLoader, Font } from "three/addons/loaders/FontLoader.js";
+    import { TextGeometry } from "three/addons/geometries/TextGeometry.js";
+    import { FirstPersonControls } from "three/addons/controls/FirstPersonControls.js";
 
-     let movies: TMovie[] = $state([]);
-    let yearRange: [Date, Date] | undefined = $state();
+    import { addGround, onWindowResize, loadModels } from "$lib/Helper-3D";
 
-    function getYearCountArray(movies: TMovie[]) {
-        let yearCount: { [year: number]: number } = {};
-        const allYears = [...new Set(movies.map((d) => d.year.getFullYear()))];
-        for (let year of allYears) {
-            yearCount[year] = movies.filter((d) => d.year.getFullYear() == year).length;
-        }
-        const yearCountArray = Object.entries(yearCount).map(([year, count]) => ({
-            x: new Date(year),
-            y: count as number,
+    import * as d3 from "d3";
+
+    // --------------------------------------------------------------
+    // 🔥 1. LOAD REAL MOVIE DATA
+    // --------------------------------------------------------------
+
+    type TMovie = {
+        genres: string[];
+    };
+
+    let movies: TMovie[] = [];
+
+    async function loadMovieData() {
+        const rows = await d3.csv("/summer_movies.csv");
+
+        movies = rows.map((d: any) => ({
+            genres: d.genres ? d.genres.split(",").map(s => s.trim()) : []
         }));
-        yearCountArray.sort((a, b) => (a.x < b.x ? -1 : 1));
-        return yearCountArray;
     }
-    let yearCountArray = $derived(getYearCountArray(movies));
 
-    type TAxisSelection = { x: keyof TMovie; y: keyof TMovie; size: keyof TMovie };
-    let axisSelection: TAxisSelection = $state({
-        x: "year",
-        y: "average_rating",
-        size: "num_votes",
+    // --------------------------------------------------------------
+    // 🔥 2. COMPUTE GENRE COUNTS (REPLACES DUMMY DATA)
+    // --------------------------------------------------------------
+
+    function getGenreCounts() {
+        const counts: Record<string, number> = {};
+
+        movies.forEach(m => {
+            m.genres.forEach(g => {
+                if (!counts[g]) counts[g] = 0;
+                counts[g]++;
+            });
+        });
+
+        return counts;
+    }
+
+    let genreData: Record<string, number> = {};  // replaces dummyData
+
+    // --------------------------------------------------------------
+    // 🔥 3. LOAD DATA BEFORE INIT
+    // --------------------------------------------------------------
+
+    onMount(async () => {
+        await loadMovieData();        // 1. load CSV
+        genreData = getGenreCounts(); // 2. compute real genre counts
+        init(window.innerWidth, window.innerHeight);
     });
 
-    async function loadCsv() {
-        try {
-            const csvUrl = "./summer_movies.csv";
-            movies = await d3.csv(csvUrl, (row) => ({
-                ...row,
-                num_votes: Number(row.num_votes),
-                runtime_minutes: Number(row.runtime_minutes),
-                genres: String(row.genres || "").split(","),
-                year: new Date(row.year),
-                average_rating: Number(row.average_rating),
-            })) as unknown as TMovie[];
-        } catch (error) {
-            console.error("Error loading CSV:", error);
-        }
+    // --------------------------------------------------------------
+    // (YOUR ORIGINAL CODE BELOW – UNCHANGED)
+    // --------------------------------------------------------------
+
+    let container: HTMLElement;
+    let camera: THREE.PerspectiveCamera;
+    let scene: THREE.Scene;
+    let renderer: THREE.WebGLRenderer;
+
+    const FLOOR = -250;
+
+    const morphs: Array<THREE.Mesh> = [];
+    let mixer: THREE.AnimationMixer;
+
+    const clock = new THREE.Clock();
+
+    function init(SCREEN_WIDTH: number, SCREEN_HEIGHT: number) {
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(SCREEN_WIDTH, SCREEN_HEIGHT);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFShadowMap;
+        container.appendChild(renderer.domElement);
+
+        camera = new THREE.PerspectiveCamera(
+            23,
+            SCREEN_WIDTH / SCREEN_HEIGHT,
+            10,
+            3000,
+        );
+        camera.position.set(0, 50, 1900);
+
+        scene = new THREE.Scene();
+
+        new THREE.TextureLoader().load("/3D/sky.jpg", (texture) => {
+            texture.repeat.set(0.8, 1);
+            scene.background = texture;
+        });
+
+        const ambient = new THREE.AmbientLight(0xffffff);
+        scene.add(ambient);
+
+        const light = new THREE.DirectionalLight(0xffffff, 3);
+        light.position.set(0, 1500, 1000);
+        light.castShadow = true;
+        Object.assign(light.shadow.camera, {
+            top: 2000,
+            bottom: -2000,
+            left: -2000,
+            right: 2000,
+            near: 1200,
+            far: 2500,
+        });
+        light.shadow.bias = 0.0001;
+        light.shadow.mapSize.width = 2048;
+        light.shadow.mapSize.height = 1024;
+        scene.add(light);
+
+        addGround(scene, FLOOR, "/3D/grasslight-big.jpg");
+
+        const fontLoader = new FontLoader();
+
+        fontLoader.load("/3D/helvetiker_bold.typeface.json", (font: Font) => {
+            const textGeo = new TextGeometry("summer movies", {
+                font: font,
+                size: 40,
+                depth: 15,
+            });
+
+            textGeo.computeBoundingBox();
+            const centerOffset =
+                -0.5 * (textGeo.boundingBox!.max.x - textGeo.boundingBox!.min.x);
+
+            const textMaterial = new THREE.MeshStandardMaterial({
+                color: 0x449900,
+            });
+
+            const titleMesh = new THREE.Mesh(textGeo, textMaterial);
+            titleMesh.position.x = centerOffset;
+            titleMesh.position.y = FLOOR + 500;
+            titleMesh.castShadow = true;
+            scene.add(titleMesh);
+
+            // 🔥 USE REAL GENRE DATA HERE
+            createBars(scene, font, genreData);
+        });
+
+        const models = [
+            {
+                path: "/3D/Horse.glb",
+                speed: 300,
+                duration: 1,
+                x: 100 - Math.random() * 1000,
+                y: FLOOR,
+                z: 300,
+                scale: 0.5,
+            },
+            {
+                path: "/3D/Horse.glb",
+                speed: 300,
+                duration: 1,
+                x: 100 - Math.random() * 1000,
+                y: FLOOR,
+                z: 100,
+                scale: 0.5,
+            },
+            {
+                path: "/3D/Flamingo.glb",
+                speed: 350,
+                duration: 1,
+                x: 300 - Math.random() * 500,
+                y: FLOOR + 550,
+                z: 100,
+                scale: 0.5,
+            },
+            {
+                path: "/3D/Flamingo.glb",
+                speed: 350,
+                duration: 1,
+                x: 300 - Math.random() * 500,
+                y: FLOOR + 550,
+                z: 200,
+                scale: 0.5,
+            },
+            {
+                path: "/3D/Parrot.glb",
+                speed: 350,
+                duration: 0.5,
+                x: 500 - Math.random() * 500,
+                y: FLOOR + 500,
+                z: 700,
+                scale: 0.5,
+            },
+        ];
+
+        mixer = loadModels(models, scene, mixer, morphs);
+
+        window.addEventListener("resize", () =>
+            onWindowResize(
+                camera,
+                renderer,
+                window.innerWidth,
+                window.innerHeight,
+            ),
+        );
+
+        renderer.setAnimationLoop(animate);
     }
-    onMount(loadCsv);
 
-    // dropdown options
-    const attrOptionsX = $derived(movies[0] ? Object.keys(movies[0]) : []);
-    // remove arrays/long text from Y/Size (you can also filter 'title' fields if present)
-    const attrOptionsY = $derived(movies[0] ? Object.keys(movies[0]).filter((d) => d !== "genres") : []);
-    const attrOptionsS = $derived(movies[0] ? Object.keys(movies[0]).filter((d) => d !== "genres") : []);
+    function createBars(scene: THREE.Scene, font: Font, data: any) {
+        const maxHeight = 400;
+        const barMaxWidth = window.innerWidth * 0.9;   // 90% of screen width
 
-    // ---------- AUTO SIZE LOGIC ----------
-    function isBand(attr: keyof TMovie): boolean {
-        if (!movies[0]) return false;
-        const v = movies[0][attr];
-        return typeof v === "string" || typeof v === "object"; // arrays count as categorical
+
+        const xScale = d3
+            .scaleBand()
+            .domain(Object.keys(data))
+            .range([-barMaxWidth / 2, barMaxWidth / 2])
+            .padding(0.2);
+
+
+        const yScale = d3
+            .scaleLinear()
+            .domain([0, Math.max(...Object.values(data).map((d) => d))])
+            .range([0, maxHeight]);
+
+        Object.keys(data).forEach((genre) => {
+            const bar = createOneBar(
+                yScale(data[genre]),
+                xScale.bandwidth(),
+            );
+            bar.position.set(
+                xScale(genre),
+                FLOOR + yScale(data[genre]) / 2,
+                0,
+            );
+            scene.add(bar);
+
+            addLabelToBar(
+                scene,
+                `${genre}: ${data[genre]}`,
+                xScale(genre)! - xScale.bandwidth() / 2,
+                FLOOR + 5,
+                bar.position.z + xScale.bandwidth(),
+                font,
+            );
+        });
     }
 
-    function uniqueCount(attr: keyof TMovie, rows: TMovie[]) {
-        if (!rows.length) return 0;
-        if (attr === "genres") {
-            // union of all genres
-            const set = new Set<string>();
-            rows.forEach((m) => (m.genres || []).forEach((g) => set.add(g)));
-            return set.size;
-        }
-        const set = new Set<any>();
-        rows.forEach((m) => set.add(m[attr] as any));
-        return set.size;
+    function createOneBar(height: number, width: number) {
+        const geometry = new THREE.CylinderGeometry(
+            width / 2,
+            width / 2,
+            height,
+            32,
+        );
+
+        const material = new THREE.MeshStandardMaterial({
+            map: new THREE.TextureLoader().load("/3D/wood-texture.jpg"),
+        });
+
+        const bar = new THREE.Mesh(geometry, material);
+        bar.castShadow = true;
+        bar.receiveShadow = true;
+        return bar;
     }
 
-    // base sizes + per-category growth + clamps
-    const BASE_W = 600, BASE_H = 500;
-    const PER_CAT_W = 28;   // grow x-length ~28 px per category
-    const PER_CAT_H = 22;   // grow y-length ~22 px per category
-    const MIN_W = 520, MAX_W = 1400;
-    const MIN_H = 360, MAX_H = 1000;
+    function addLabelToBar(
+        scene: THREE.Scene,
+        text: string,
+        x: number,
+        y: number,
+        z: number,
+        font: Font,
+    ) {
+        const textGeometry = new TextGeometry(text, {
+            font: font,
+            size: 12,
+            depth: 4,
+        });
 
-    // compute domain sizes for currently visible rows (after brushing)
-    const visibleMovies = $derived(
-        yearRange
-            ? movies.filter((d) => d.year <= yearRange[1] && d.year >= yearRange[0])
-            : movies
-    );
+        const textMaterial = new THREE.MeshPhysicalMaterial({
+            color: 0xffffff,
+        });
 
-    const xIsBand = $derived(isBand(axisSelection.x));
-    const yIsBand = $derived(isBand(axisSelection.y));
-    const xCatCount = $derived(xIsBand ? uniqueCount(axisSelection.x, visibleMovies) : 0);
-    const yCatCount = $derived(yIsBand ? uniqueCount(axisSelection.y, visibleMovies) : 0);
+        const textMesh = new THREE.Mesh(textGeometry, textMaterial);
 
-    // dynamic width/height (clamped)
-    const plotWidth = $derived(
-        xIsBand
-            ? Math.max(MIN_W, Math.min(MAX_W, BASE_W + Math.max(0, xCatCount - 12) * PER_CAT_W))
-            : BASE_W
-    );
-    const plotHeight = $derived(
-        yIsBand
-            ? Math.max(MIN_H, Math.min(MAX_H, BASE_H + Math.max(0, yCatCount - 10) * PER_CAT_H))
-            : BASE_H
-    );
+        textMesh.position.set(x, y, z);
+        textMesh.castShadow = true;
+        textMesh.receiveShadow = false;
+
+        scene.add(textMesh);
+    }
+
+    function animate() {
+        const delta = clock.getDelta();
+        mixer.update(delta);
+
+        morphs.forEach((morph) => {
+            morph.position.x += morph.speed * delta;
+            if (morph.position.x > window.innerWidth / 2) {
+                morph.position.x = -window.innerWidth / 2 - Math.random() * 200;
+            }
+        });
+
+        renderer.render(scene, camera);
+    }
 </script>
 
-<div class="container" style="width: {Math.min(plotWidth + 80, 1500)}px;">
-    <h1>Summer Movies</h1>
-    <p>Here are {movies.length == 0 ? "..." : movies.length + " "} movies</p>
-
-    {#if movies.length > 0}
-        <div class="selectors" style="display:flex; gap:12px; align-items:center; flex-wrap: wrap;">
-            <label> X Axis:
-                <select bind:value={axisSelection.x}>
-                    {#each attrOptionsX as key}<option value={key}>{key}</option>{/each}
-                </select>
-            </label>
-            <label> Y Axis:
-                <select bind:value={axisSelection.y}>
-                    {#each attrOptionsY as key}<option value={key}>{key}</option>{/each}
-                </select>
-            </label>
-            <label> Size:
-                <select bind:value={axisSelection.size}>
-                    {#each attrOptionsS as key}<option value={key}>{key}</option>{/each}
-                </select>
-            </label>
-        </div>
-
-        <div class="chartWrap" style="overflow:auto;">
-            <Scatter
-                movies={visibleMovies}
-                x={axisSelection.x}
-                y={axisSelection.y}
-                size={axisSelection.size}
-                width={plotWidth}
-                height={plotHeight}
-            />
-        </div>
-
-        <br />
-
-        <div class="chartWrap" style="overflow:auto;">
-            <Line data={getYearCountArray(movies)} bind:yearRange width={plotWidth} />
-        </div>
-    {/if}
-</div>
+<div bind:this={container} class="container"></div>
 
 <style>
-    .container {
-        margin: 10px auto;
-        padding: 10px;
-    }
-    .chartWrap { /* allow big categorical charts without breaking the page */
-        max-width: 100%;
+    div.container {
+        width: 100%;
+        height: 100%;
     }
 </style>

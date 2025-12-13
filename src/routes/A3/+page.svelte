@@ -1,34 +1,47 @@
-<script>
-  import { Scroll } from "$lib";
-  import Bar from "$lib/Bar.svelte";
+<script lang="ts">
   import { onMount } from "svelte";
   import * as d3 from "d3";
-  import type { TMovie } from "../../../types";
+  import type { TMovie } from "../../types";
+  import StoryOpen from "./StoryOpen.svelte";
+  import Scrolly2D from "./Scrolly2D.svelte";
+  import BarChart from "../../lib/BarChart.svelte";
 
   let movies: TMovie[] = [];
-  let myProgress = $state(0);
 
   async function loadCsv() {
-    movies = await d3.csv("./summer_movies.csv", d => ({
-      ...d,
-      year: +d.year,
-      runtime_minutes: +d.runtime_minutes,
-      average_rating: +d.average_rating,
-      num_votes: +d.num_votes,
-      genres: d.genres.split(","),
-    }));
+    try {
+      const csvUrl = "/data/summer_movies.csv";   // ✅ FIXED
+      movies = await d3.csv(csvUrl, (d: any) => ({
+        tconst: d.tconst,
+        title_type: d.title_type,
+        primary_title: d.primary_title,
+        original_title: d.original_title,
+        year: d.year ? new Date(+d.year, 0, 1) : null,
+        runtime_minutes: d.runtime_minutes ? +d.runtime_minutes : null,
+        genres: d.genres ? d.genres.split(",") : [],   // ✅ FIXED array
+        simple_title: d.simple_title,
+        average_rating: d.average_rating ? +d.average_rating : null,
+        num_votes: d.num_votes ? +d.num_votes : null
+      }));
+
+      console.log("CSV loaded:", movies.length);
+    } catch (e) {
+      console.error("CSV load error:", e);
+    }
   }
 
   onMount(loadCsv);
 </script>
 
-<Scroll bind:progress={myProgress}>
-  <div>
-    <h2>Genre changes over time</h2>
-    <p>Scroll down to see how movie genres rise and fall through the years.</p>
-  </div>
+<div class="container">
+  <StoryOpen movieNum={movies.length} />
+  <Scrolly2D {movies} />
+  <BarChart {movies} />
+</div>
 
-  <svelte:fragment slot="viz">
-    <Bar {movies} progress={myProgress} />
-  </svelte:fragment>
-</Scroll>
+<style>
+  .container {
+    width: 80vw;
+    margin: 10px auto;
+  }
+</style>
